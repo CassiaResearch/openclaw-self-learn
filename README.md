@@ -4,17 +4,28 @@ An OpenClaw plugin that enables autonomous skill creation and evolution. The age
 
 ## How It Works
 
-1. **Guidance prompt** is injected into every system prompt via a `before_prompt_build` hook, telling the agent when and how to create skills
-2. **`skill_manage` tool** gives the agent CRUD operations for skills (create, edit, patch, delete, plus supporting file management)
-3. **Reference skill** provides the agentskills.io format spec on demand when the agent is writing a skill
-4. **Security guard** scans all skill content for threat patterns before writing
-5. **Atomic writes** ensure skills are never left in a partially-written state
+1. **Guidance prompt** is injected into every system prompt via a `before_prompt_build` hook, defining a mandatory end-of-task evaluation that tells the agent **when** to create or update skills.
+2. **`skill_manage` tool** gives the agent CRUD operations for self-learned skills (list, view, create, edit, patch, delete, plus supporting file management).
+3. **Delegates authoring to `skill-creator`** — for the **how-to** of writing a good skill, the agent uses OpenClaw's bundled `skill-creator` skill. This plugin focuses on when to create, not how to author.
+4. **Security guard** scans all skill content for threat patterns (exfiltration, destructive commands, prompt injection) before writing.
+5. **Atomic writes** ensure skills are never left in a partially-written state (temp file + rename).
+6. **Heartbeat task** runs every 6 hours in `HEARTBEAT.md` to review self-learned skills for hygiene issues.
 
-Skills are stored in the workspace `skills/` directory with a `self-learned-` prefix (e.g., `skills/self-learned-deep-research/SKILL.md`), so they're automatically discovered by OpenClaw's skill loading pipeline. The prefix ensures the plugin only manages its own skills and never touches others.
+Skills are stored in the workspace `skills/` directory with a `self-learned-` prefix (e.g., `skills/self-learned-deep-research/SKILL.md`), so they're automatically discovered by OpenClaw's skill loading pipeline. The prefix is the ownership boundary — the plugin only manages directories with this prefix and never touches other skills.
+
+## The Self-Learning Loop
+
+On every turn, the agent's system prompt instructs it to run a three-question evaluation at the end of any task:
+
+1. **Count:** Did this task use 5 or more tool calls?
+2. **Reusable:** Could the approach or methodology help in a future session — even on a different topic or input?
+3. **Novel:** Did you discover something non-obvious — a multi-step sequence, a tricky fix, a workaround, a gotcha?
+
+If **any two are true**, the agent creates a new skill (via `skill-creator`) or patches an existing one (via `skill_manage`) before delivering its response. If the agent reads and uses an existing self-learned skill during a task and finds it stale, it must patch it immediately.
 
 ## Installation
 
-Install using the `openclaw plugins install` CLI. The plugin supports all standard installation methods.
+Install using the `openclaw plugins install` CLI.
 
 ### From a local path
 
@@ -36,16 +47,10 @@ openclaw plugins install self-learn.tar.gz
 
 Supported formats: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 
-### From npm (once published)
+### From GitHub
 
 ```bash
-openclaw plugins install @openclaw/self-learn-plugin
-```
-
-Pin to an exact version:
-
-```bash
-openclaw plugins install @openclaw/self-learn-plugin@0.1.0 --pin
+openclaw plugins install https://github.com/CassiaResearch/openclaw-self-learn
 ```
 
 ### Verify installation
@@ -71,7 +76,7 @@ Once loaded:
 openclaw plugins disable self-learn   # Temporarily disable
 openclaw plugins enable self-learn    # Re-enable
 openclaw plugins uninstall self-learn # Remove entirely
-openclaw plugins doctor              # Diagnose load issues
+openclaw plugins doctor               # Diagnose load issues
 ```
 
 ## Configuration
@@ -95,20 +100,18 @@ Configure via your OpenClaw config under `plugins.entries.self-learn.config`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `maxSkills` | `100` | Maximum number of self-learned skills |
-| `enableHeartbeat` | `true` | Add a periodic heartbeat task to HEARTBEAT.md for skill hygiene review |
+| `maxSkills` | `100` | Maximum number of self-learned skills. New creates are rejected once reached. |
+| `enableHeartbeat` | `true` | Add a periodic heartbeat task to `HEARTBEAT.md` for skill hygiene review. |
 
 ## Heartbeat Integration
 
-The plugin automatically adds a `self-learn-review` task to `HEARTBEAT.md` on first activation. This task runs every 30 minutes and prompts the agent to:
+On first activation, the plugin adds a `self-learn-review` task to the workspace `HEARTBEAT.md`. This task runs every **6 hours** and prompts the agent to:
 
-1. Check if recent complex work should become a new skill
-2. Patch any existing skills that were found stale during use
-3. Move on if nothing needs attention
+1. Run `skill_manage(action='list')` to review current self-learned skills
+2. Patch any that are stale or could be improved based on recent sessions
+3. Reply `HEARTBEAT_OK` if nothing needs attention
 
-This is the periodic safety net that catches complex workflows the agent didn't capture in-the-moment. The heartbeat task works alongside the system prompt guidance — the guidance nudges the agent during the task, the heartbeat catches anything that slipped through.
-
-The task is idempotent — re-enabling the plugin won't duplicate it. Uninstalling the plugin leaves the task in HEARTBEAT.md (remove it manually if desired).
+The heartbeat task is a maintenance safety net — the primary self-learning happens during active sessions via the system prompt guidance. The heartbeat is idempotent (re-enabling the plugin won't duplicate the task) and non-destructive (uninstalling leaves the task in `HEARTBEAT.md`; remove it manually if desired).
 
 ## Tool Reference
 
@@ -122,12 +125,16 @@ The `skill_manage` tool supports 8 actions:
 | `edit` | `name`, `content` | Full SKILL.md rewrite (major overhauls) |
 | `patch` | `name`, `find`, `replace` | Targeted find-and-replace within SKILL.md |
 | `delete` | `name` | Remove a self-learned skill |
-| `write_file` | `name`, `file_path`, `content` | Add/overwrite a supporting file |
+| `write_file` | `name`, `file_path`, `content` | Add/overwrite a supporting file in `references/`, `scripts/`, `assets/`, or `templates/` |
 | `remove_file` | `name`, `file_path` | Remove a supporting file |
+
+All write actions (create, edit, patch, write_file) validate frontmatter against the [agentskills.io specification](https://agentskills.io/specification), scan content for threat patterns, and use atomic writes. The `self-learned-` directory prefix is automatically applied — agents pass the logical skill name (e.g., `deep-research`) and the plugin stores it at `skills/self-learned-deep-research/`.
 
 ## Skill Format
 
-Skills follow the [agentskills.io specification](https://agentskills.io/specification). Minimal example:
+Skills follow the [agentskills.io specification](https://agentskills.io/specification). The plugin rejects unknown top-level frontmatter fields — allowed fields are `name`, `description`, `author`, `license`, `compatibility`, `metadata`, `allowed-tools`. Custom metadata (tags, version, etc.) goes under `metadata:`.
+
+Minimal example:
 
 ```yaml
 ---
@@ -141,12 +148,18 @@ author: self-learn-plugin
 # Deploy with Helm
 
 ## Quick Reference
-| Action   | Command                              |
-|----------|--------------------------------------|
+| Action   | Command                                 |
+|----------|-----------------------------------------|
 | Deploy   | `helm upgrade --install release chart/` |
-| Rollback | `helm rollback release`              |
+| Rollback | `helm rollback release`                 |
 
 ## Gotchas
 - Always run `helm diff` before upgrading to preview changes.
 - The staging cluster uses a different kubeconfig context than production.
 ```
+
+For detailed authoring guidance, the agent uses OpenClaw's bundled `skill-creator` skill.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
