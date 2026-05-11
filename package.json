@@ -15,11 +15,12 @@
   "files": [
     "dist/**",
     "openclaw.plugin.json",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
-    "prepack": "npm run build",
+    "prepack": "pnpm run build",
     "test": "vitest run"
   },
   "peerDependencies": {
