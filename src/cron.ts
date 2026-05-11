@@ -22,8 +22,9 @@ export const REVIEW_PROMPT = [
   "  - List self-learned skills: skill_manage(action='list').",
   "  - List the workspace skills directory contents (e.g. `ls skills/`) and identify",
   "    built-in / non-self-learned skill directories (those WITHOUT the 'self-learned-' prefix).",
-  "  - For each self-learned skill, read its frontmatter description (skill_manage(action='view'))",
-  "    and the built-in skill's description (read the skill's SKILL.md frontmatter directly).",
+  "  - For each self-learned skill, read its frontmatter description (skill_manage(action='view')),",
+  "    the built-in skill's description (read the skill's SKILL.md frontmatter directly),",
+  "    and the contents of the skill.",
   "  - A conflict = both skills cover the same workflow / would plausibly be invoked for the same task.",
   "  - For each conflict, capture: <self-learned-name> vs <built-in-name>, the overlap in one line,",
   "    and a recommended action (merge into built-in, delete self-learned, rename, or scope-down).",
@@ -191,9 +192,11 @@ export function diffPatch(
     (!!desiredDelivery &&
       !!jobDelivery &&
       jobDelivery.mode === desiredDelivery.mode &&
-      (jobDelivery.channel ?? undefined) === (desiredDelivery.channel ?? undefined) &&
+      (jobDelivery.channel ?? undefined) ===
+        (desiredDelivery.channel ?? undefined) &&
       (jobDelivery.to ?? undefined) === (desiredDelivery.to ?? undefined) &&
-      (jobDelivery.bestEffort ?? undefined) === (desiredDelivery.bestEffort ?? undefined));
+      (jobDelivery.bestEffort ?? undefined) ===
+        (desiredDelivery.bestEffort ?? undefined));
   if (!sameDelivery) patch.delivery = desiredDelivery;
 
   return Object.keys(patch).length === 0 ? null : patch;
